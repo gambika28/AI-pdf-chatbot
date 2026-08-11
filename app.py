@@ -11,6 +11,8 @@ from langchain_google_genai import (
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import PromptTemplate
 
+from langchain_google_genai import ChatGoogleGenerativeAI
+
 
 # Load environment variables
 
@@ -109,7 +111,7 @@ Answer:
 """
 
     model = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         google_api_key=GOOGLE_API_KEY,
         temperature=0.3
     )
