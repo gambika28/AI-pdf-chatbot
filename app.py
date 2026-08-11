@@ -74,7 +74,7 @@ def get_text_chunks(text):
 def get_vector_store(text_chunks):
 
     embeddings = GoogleGenerativeAIEmbeddings(
-        model="gemini-embedding-001"
+        model="gemini-embedding-001",
         google_api_key=GOOGLE_API_KEY
     )
 
