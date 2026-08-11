@@ -11,7 +11,7 @@ from langchain_google_genai import (
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import PromptTemplate
 
-from langchain_google_genai import ChatGoogleGenerativeAI
+
 
 
 # Load environment variables
@@ -94,12 +94,20 @@ def get_vector_store(text_chunks):
 def get_conversational_chain():
 
     prompt_template = """
-Answer the question as detailed as possible from the provided context.
+You are an AI assistant that answers questions from uploaded PDF documents.
 
-Use ONLY the information available in the context.
+Use ONLY the information provided in the context.
 
-If the answer is not available in the context, say:
-"Answer is not available in the provided context."
+Answer the user's question clearly and directly.
+
+Rules:
+- Do not repeat the question.
+- Do not mention the words "provided context".
+- Do not add information that is not present in the documents.
+- Keep the answer relevant to the question.
+- Use bullet points when they improve readability.
+- If the answer cannot be found in the documents, say:
+  "Answer is not available in the uploaded documents."
 
 Context:
 {context}
@@ -112,8 +120,7 @@ Answer:
 
     model = ChatGoogleGenerativeAI(
         model="gemini-3.6-flash",
-        google_api_key=GOOGLE_API_KEY,
-        temperature=0.3
+        google_api_key=GOOGLE_API_KEY
     )
 
     prompt = PromptTemplate(
@@ -124,7 +131,6 @@ Answer:
     chain = prompt | model
 
     return chain
-
 
 # ---------------------------------------------------
 # Ask question
@@ -143,6 +149,7 @@ def user_input(user_question):
         allow_dangerous_deserialization=True
     )
 
+    # Retrieve top 4 relevant chunks
     docs = new_db.similarity_search(
         user_question,
         k=4
@@ -150,19 +157,23 @@ def user_input(user_question):
 
     st.info(f"🔎 Retrieved {len(docs)} relevant chunks")
 
+    # Create Gemini chain
     chain = get_conversational_chain()
 
+    # Combine retrieved chunks
     context = "\n\n".join(
         [doc.page_content for doc in docs]
     )
 
+    # Generate answer
     response = chain.invoke({
         "context": context,
         "question": user_question
     })
 
-    st.write("### 🤖 Answer")
-    st.write(response.content)
+    # Display only the answer
+    st.markdown("### 🤖 Answer")
+    st.markdown(response.content)
 
 
 # ---------------------------------------------------
