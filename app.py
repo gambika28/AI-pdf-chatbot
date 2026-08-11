@@ -4,63 +4,99 @@ from dotenv import load_dotenv
 from PyPDF2 import PdfReader
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 from langchain_google_genai import (
     GoogleGenerativeAIEmbeddings,
     ChatGoogleGenerativeAI
 )
+
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import PromptTemplate
 
 
+# ============================================================
+# PAGE CONFIG
+# ============================================================
+
+st.set_page_config(
+    page_title="Chat With Multiple PDFs",
+    page_icon="📚",
+    layout="wide"
+)
 
 
-# Load environment variables
-
+# ============================================================
+# LOAD ENVIRONMENT VARIABLES
+# ============================================================
 
 load_dotenv()
 
-# Get API key from .env locally or Streamlit Secrets when deployed
+
+# ============================================================
+# GET GOOGLE API KEY
+# ============================================================
+
 try:
     GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 except Exception:
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
+
 if not GOOGLE_API_KEY:
-    st.error("GOOGLE_API_KEY is not configured.")
+    st.error(
+        "GOOGLE_API_KEY is not configured. "
+        "Please add it to your .env file or Streamlit Secrets."
+    )
     st.stop()
 
 
-
-# ---------------------------------------------------
-# Extract text from multiple PDFs
-# ---------------------------------------------------
+# ============================================================
+# EXTRACT TEXT FROM MULTIPLE PDFs
+# ============================================================
 
 def get_pdf_text(pdf_docs):
+
     text = ""
 
     for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
 
-        for page_number, page in enumerate(pdf_reader.pages, start=1):
-            page_text = page.extract_text()
+        try:
+            pdf_reader = PdfReader(pdf)
 
-            if page_text:
-                text += (
-                    f"\n\nSource: {pdf.name} | Page: {page_number}\n"
-                    f"{page_text}"
-                )
+            for page_number, page in enumerate(
+                pdf_reader.pages,
+                start=1
+            ):
+
+                page_text = page.extract_text()
+
+                if page_text:
+
+                    text += (
+                        f"\n\n"
+                        f"Source: {pdf.name} | Page: {page_number}\n"
+                        f"{page_text}"
+                    )
+
+        except Exception as e:
+
+            st.warning(
+                f"Could not read {pdf.name}: {str(e)}"
+            )
 
     return text
 
 
-# ---------------------------------------------------
-# Split text into chunks
-# ---------------------------------------------------
+# ============================================================
+# SPLIT TEXT INTO CHUNKS
+# ============================================================
 
 def get_text_chunks(text):
+
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=5000,
-        chunk_overlap=500
+        chunk_overlap=500,
+        length_function=len
     )
 
     chunks = text_splitter.split_text(text)
@@ -68,9 +104,9 @@ def get_text_chunks(text):
     return chunks
 
 
-# ---------------------------------------------------
-# Create FAISS vector store
-# ---------------------------------------------------
+# ============================================================
+# CREATE FAISS VECTOR STORE
+# ============================================================
 
 def get_vector_store(text_chunks):
 
@@ -86,28 +122,32 @@ def get_vector_store(text_chunks):
 
     vector_store.save_local("faiss_index")
 
+    return vector_store
 
-# ---------------------------------------------------
-# Gemini conversational chain
-# ---------------------------------------------------
+
+# ============================================================
+# GEMINI CONVERSATIONAL CHAIN
+# ============================================================
 
 def get_conversational_chain():
 
     prompt_template = """
-You are an AI assistant that answers questions from uploaded PDF documents.
+You are an AI assistant that answers questions about uploaded PDF documents.
 
-Use ONLY the information provided in the context.
-
-Answer the user's question clearly and directly.
+Use ONLY the information available in the context.
 
 Rules:
-- Do not repeat the question.
-- Do not mention the words "provided context".
-- Do not add information that is not present in the documents.
-- Keep the answer relevant to the question.
-- Use bullet points when they improve readability.
-- If the answer cannot be found in the documents, say:
-  "Answer is not available in the uploaded documents."
+
+1. Answer the user's question clearly and directly.
+2. Do not repeat the question.
+3. Do not mention "provided context".
+4. Do not make up information.
+5. Do not use information outside the uploaded documents.
+6. Keep the answer relevant to the question.
+7. Use bullet points when useful.
+8. If the answer is not available in the documents, say:
+
+"Answer is not available in the uploaded documents."
 
 Context:
 {context}
@@ -125,84 +165,224 @@ Answer:
 
     prompt = PromptTemplate(
         template=prompt_template,
-        input_variables=["context", "question"]
+        input_variables=[
+            "context",
+            "question"
+        ]
     )
 
     chain = prompt | model
 
     return chain
 
-# ---------------------------------------------------
-# Ask question
-# ---------------------------------------------------
+
+# ============================================================
+# EXTRACT CLEAN TEXT FROM GEMINI RESPONSE
+# ============================================================
+
+def extract_clean_answer(response):
+
+    content = response.content
+
+    # Gemini may return a list of content blocks
+    if isinstance(content, list):
+
+        text_parts = []
+
+        for block in content:
+
+            if isinstance(block, dict):
+
+                if block.get("type") == "text":
+
+                    text = block.get("text", "")
+
+                    if text:
+                        text_parts.append(text)
+
+            elif isinstance(block, str):
+
+                text_parts.append(block)
+
+        return "\n".join(text_parts).strip()
+
+    # Normal string response
+    if isinstance(content, str):
+
+        return content.strip()
+
+    return str(content)
+
+
+# ============================================================
+# ASK QUESTION
+# ============================================================
 
 def user_input(user_question):
 
-    embeddings = GoogleGenerativeAIEmbeddings(
-        model="gemini-embedding-001",
-        google_api_key=GOOGLE_API_KEY
-    )
+    try:
 
-    new_db = FAISS.load_local(
-        "faiss_index",
-        embeddings,
-        allow_dangerous_deserialization=True
-    )
+        # ----------------------------------------------------
+        # Create embeddings
+        # ----------------------------------------------------
 
-    # Retrieve top 4 relevant chunks
-    docs = new_db.similarity_search(
-        user_question,
-        k=4
-    )
-
-    st.info(f"🔎 Retrieved {len(docs)} relevant chunks")
-
-    # Create Gemini chain
-    chain = get_conversational_chain()
-
-    # Combine retrieved chunks
-    context = "\n\n".join(
-        [doc.page_content for doc in docs]
-    )
-
-    # Generate answer
-    response = chain.invoke({
-        "context": context,
-        "question": user_question
-    })
-
-    # Display only the answer
-    st.markdown("### 🤖 Answer")
-    st.markdown(response.content)
+        embeddings = GoogleGenerativeAIEmbeddings(
+            model="gemini-embedding-001",
+            google_api_key=GOOGLE_API_KEY
+        )
 
 
-# ---------------------------------------------------
-# Main application
-# ---------------------------------------------------
+        # ----------------------------------------------------
+        # Load FAISS database
+        # ----------------------------------------------------
+
+        new_db = FAISS.load_local(
+            "faiss_index",
+            embeddings,
+            allow_dangerous_deserialization=True
+        )
+
+
+        # ----------------------------------------------------
+        # Retrieve top 4 relevant chunks
+        # ----------------------------------------------------
+
+        docs = new_db.similarity_search(
+            user_question,
+            k=4
+        )
+
+
+        # ----------------------------------------------------
+        # Show retrieval information
+        # ----------------------------------------------------
+
+        st.info(
+            f"🔎 Retrieved {len(docs)} relevant chunks"
+        )
+
+
+        # ----------------------------------------------------
+        # Create context
+        # ----------------------------------------------------
+
+        context = "\n\n".join(
+            [
+                doc.page_content
+                for doc in docs
+            ]
+        )
+
+
+        # ----------------------------------------------------
+        # Create Gemini chain
+        # ----------------------------------------------------
+
+        chain = get_conversational_chain()
+
+
+        # ----------------------------------------------------
+        # Ask Gemini
+        # ----------------------------------------------------
+
+        response = chain.invoke(
+            {
+                "context": context,
+                "question": user_question
+            }
+        )
+
+
+        # ----------------------------------------------------
+        # Extract ONLY text from Gemini response
+        # ----------------------------------------------------
+
+        answer = extract_clean_answer(response)
+
+
+        # ----------------------------------------------------
+        # Display answer
+        # ----------------------------------------------------
+
+        st.markdown("### 🤖 Answer")
+
+        st.markdown(answer)
+
+
+        # ----------------------------------------------------
+        # Display retrieved sources
+        # ----------------------------------------------------
+
+        with st.expander("📚 View Retrieved Chunks"):
+
+            for i, doc in enumerate(
+                docs,
+                start=1
+            ):
+
+                st.markdown(
+                    f"#### Chunk {i}"
+                )
+
+                st.write(
+                    doc.page_content
+                )
+
+
+    except Exception as e:
+
+        st.error(
+            "❌ An error occurred while generating the answer."
+        )
+
+        st.exception(e)
+
+
+# ============================================================
+# MAIN APPLICATION
+# ============================================================
 
 def main():
 
-    st.set_page_config(
-        page_title="Chat With Multiple PDFs",
-        page_icon="📚",
-        layout="wide"
+    # --------------------------------------------------------
+    # HEADER
+    # --------------------------------------------------------
+
+    st.title(
+        "📚 Chat With Multiple PDFs"
     )
 
-    st.title("📚 Chat With Multiple PDFs")
     st.write(
-        "Upload multiple PDF documents and ask questions about them using Gemini."
+        "Upload multiple PDF documents and "
+        "ask questions about them using Gemini."
     )
 
-    # Sidebar
+
+    # ========================================================
+    # SIDEBAR
+    # ========================================================
+
     with st.sidebar:
 
-        st.header("📂 Upload Documents")
+        st.header(
+            "📂 Upload Documents"
+        )
+
+
+        # ----------------------------------------------------
+        # Multiple PDF uploader
+        # ----------------------------------------------------
 
         pdf_docs = st.file_uploader(
             "Upload your PDF files",
             type=["pdf"],
             accept_multiple_files=True
         )
+
+
+        # ----------------------------------------------------
+        # Display selected PDFs
+        # ----------------------------------------------------
 
         if pdf_docs:
 
@@ -211,9 +391,20 @@ def main():
             )
 
             for pdf in pdf_docs:
-                st.write(f"📄 {pdf.name}")
 
-        if st.button("🚀 Process PDFs"):
+                st.write(
+                    f"📄 {pdf.name}"
+                )
+
+
+        # ----------------------------------------------------
+        # Process PDFs button
+        # ----------------------------------------------------
+
+        if st.button(
+            "🚀 Process PDFs",
+            use_container_width=True
+        ):
 
             if pdf_docs:
 
@@ -221,20 +412,43 @@ def main():
                     "Processing PDFs and creating embeddings..."
                 ):
 
-                    raw_text = get_pdf_text(pdf_docs)
+                    # Extract text
+                    raw_text = get_pdf_text(
+                        pdf_docs
+                    )
 
+
+                    # Check text
                     if not raw_text.strip():
+
                         st.error(
-                            "No readable text was found in the uploaded PDFs."
+                            "No readable text was found "
+                            "in the uploaded PDFs."
                         )
+
                         st.stop()
 
-                    text_chunks = get_text_chunks(raw_text)
 
-                    get_vector_store(text_chunks)
+                    # Create chunks
+                    text_chunks = get_text_chunks(
+                        raw_text
+                    )
 
+
+                    # Create vector database
+                    get_vector_store(
+                        text_chunks
+                    )
+
+
+                    # Display statistics
                     st.success(
-                        f"Successfully processed {len(pdf_docs)} PDF(s)!"
+                        f"Successfully processed "
+                        f"{len(pdf_docs)} PDF(s)!"
+                    )
+
+                    st.info(
+                        f"📦 Created {len(text_chunks)} text chunks"
                     )
 
             else:
@@ -243,27 +457,49 @@ def main():
                     "Please upload at least one PDF."
                 )
 
-    # Question area
 
-    st.subheader("💬 Ask a Question")
+    # ========================================================
+    # QUESTION AREA
+    # ========================================================
+
+    st.subheader(
+        "💬 Ask a Question"
+    )
+
 
     user_question = st.text_input(
         "Ask something about your uploaded PDFs"
     )
 
+
+    # ========================================================
+    # PROCESS QUESTION
+    # ========================================================
+
     if user_question:
 
-        if os.path.exists("faiss_index"):
+        if os.path.exists(
+            "faiss_index"
+        ):
 
-            with st.spinner("Searching documents and generating answer..."):
-                user_input(user_question)
+            with st.spinner(
+                "🔍 Searching documents and generating answer..."
+            ):
+
+                user_input(
+                    user_question
+                )
 
         else:
 
             st.warning(
-                "Please upload and process your PDFs first."
+                "⚠️ Please upload and process your PDFs first."
             )
 
+
+# ============================================================
+# RUN APPLICATION
+# ============================================================
 
 if __name__ == "__main__":
     main()
