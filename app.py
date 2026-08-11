@@ -15,12 +15,20 @@ from langchain_core.prompts import PromptTemplate
 # Load environment variables
 load_dotenv()
 
+load_dotenv()
+
+# Get API key from .env locally or Streamlit Secrets when deployed
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 if not GOOGLE_API_KEY:
-    st.error("GOOGLE_API_KEY is not configured. Please add it to your .env file.")
-    st.stop()
+    try:
+        GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+    except Exception:
+        GOOGLE_API_KEY = None
 
+if not GOOGLE_API_KEY:
+    st.error("GOOGLE_API_KEY is not configured.")
+    st.stop()
 
 # ---------------------------------------------------
 # Extract text from multiple PDFs
@@ -67,6 +75,7 @@ def get_vector_store(text_chunks):
 
     embeddings = GoogleGenerativeAIEmbeddings(
         model="gemini-embedding-001"
+        google_api_key=GOOGLE_API_KEY
     )
 
     vector_store = FAISS.from_texts(
