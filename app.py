@@ -30,7 +30,7 @@ if not GOOGLE_API_KEY:
     st.error("GOOGLE_API_KEY is not configured.")
     st.stop()
 
-st.write("API key loaded:", bool(GOOGLE_API_KEY))
+
 
 # ---------------------------------------------------
 # Extract text from multiple PDFs
