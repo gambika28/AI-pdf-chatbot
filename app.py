@@ -13,18 +13,15 @@ from langchain_core.prompts import PromptTemplate
 
 
 # Load environment variables
-load_dotenv()
+
 
 load_dotenv()
 
 # Get API key from .env locally or Streamlit Secrets when deployed
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-
-if not GOOGLE_API_KEY:
-    try:
-        GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
-    except Exception:
-        GOOGLE_API_KEY = None
+try:
+    GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+except Exception:
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 if not GOOGLE_API_KEY:
     st.error("GOOGLE_API_KEY is not configured.")
@@ -95,13 +92,12 @@ def get_vector_store(text_chunks):
 def get_conversational_chain():
 
     prompt_template = """
-Answer the question using ONLY the provided context.
+Answer the question as detailed as possible from the provided context.
+
+Use ONLY the information available in the context.
 
 If the answer is not available in the context, say:
-
-"The answer is not available in the uploaded documents."
-
-Do not make up information.
+"Answer is not available in the provided context."
 
 Context:
 {context}
@@ -114,6 +110,7 @@ Answer:
 
     model = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
+        google_api_key=GOOGLE_API_KEY,
         temperature=0.3
     )
 
@@ -134,7 +131,8 @@ Answer:
 def user_input(user_question):
 
     embeddings = GoogleGenerativeAIEmbeddings(
-        model="gemini-embedding-001"
+        model="gemini-embedding-001",
+        google_api_key=GOOGLE_API_KEY
     )
 
     new_db = FAISS.load_local(
@@ -145,8 +143,10 @@ def user_input(user_question):
 
     docs = new_db.similarity_search(
         user_question,
-        k=5
+        k=4
     )
+
+    st.info(f"🔎 Retrieved {len(docs)} relevant chunks")
 
     chain = get_conversational_chain()
 
@@ -154,14 +154,12 @@ def user_input(user_question):
         [doc.page_content for doc in docs]
     )
 
-    response = chain.invoke(
-        {
-            "context": context,
-            "question": user_question
-        }
-    )
+    response = chain.invoke({
+        "context": context,
+        "question": user_question
+    })
 
-    st.write("### Answer")
+    st.write("### 🤖 Answer")
     st.write(response.content)
 
 
